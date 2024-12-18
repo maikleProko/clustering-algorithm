@@ -1,14 +1,6 @@
-from sklearn.base import BaseEstimator, ClusterMixin
-from sklearn.metrics import pairwise_distances
-from scipy.sparse import issparse
-from sklearn.neighbors import KDTree, BallTree
-from joblib import Memory
-from warnings import warn
 from hdbscan.hdbscan_ import *
 from sklearn.utils import check_array
-from joblib.parallel import cpu_count
 import numpy as np
-from scipy.sparse import csgraph
 
 
 class ClusteringAlgo(BaseEstimator, ClusterMixin):
@@ -124,6 +116,7 @@ class ClusteringAlgo(BaseEstimator, ClusterMixin):
         if not self._all_finite:
             self.update_trees(data)
             self.update_labels_and_probabilities(data)
+        return self.labels_
 
     def fit(self, X):
         data, kwargs = self.unzip_data(X)
@@ -131,6 +124,18 @@ class ClusteringAlgo(BaseEstimator, ClusterMixin):
         self.predict(X, data)
         return self
 
+    def fit_another(self, X_train, X_test):
+        self.labels_ = []
+        data_train, kwargs = self.unzip_data(X_train)
+        data_test, _ = self.unzip_data(X_test)
+        self.perform(data_train, kwargs)
+        self.predict(data_train, data_test)
+        return self
+
     def fit_with_labels(self, X):
         self.fit(X)
         return self.labels_
+
+    def fit_with_labels_another(self, X_train, X_test):
+        self.fit_another(X_train, X_test)
+        return self.labels_[:len(X_test)]
