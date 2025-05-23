@@ -70,6 +70,8 @@ class ClusteringAlgo(BaseEstimator, ClusterMixin):
             finite_index = None
             internal_to_raw = None
             outliers = None
+
+        print('finite data: ' + str({'finite_index': finite_index, 'clean_data': clean_data, 'internal_to_raw': internal_to_raw, 'outliers': outliers}))
         return {'finite_index': finite_index, 'clean_data': clean_data, 'internal_to_raw': internal_to_raw,
                 'outliers': outliers}
 
@@ -99,18 +101,23 @@ class ClusteringAlgo(BaseEstimator, ClusterMixin):
         self._condensed_tree = remap_condensed_tree(
             self._condensed_tree, data['internal_to_raw'], data['outliers']
         )
+        print('condensed_tree: ' + str(self._condensed_tree))
+
         self._single_linkage_tree = remap_single_linkage_tree(
             self._single_linkage_tree, data['internal_to_raw'], data['outliers']
         )
+        print('single_linkage_tree: ' + str(self._single_linkage_tree))
 
     def update_labels_and_probabilities(self, data):
         new_labels = np.full(self.X.shape[0], -1)
         new_labels[data['finite_index']] = self.labels_
         self.labels_ = new_labels
+        print('labels: ' + str(self.labels_))
 
         new_probabilities = np.zeros(self.X.shape[0])
         new_probabilities[data['finite_index']] = self.probabilities_
         self.probabilities_ = new_probabilities
+        print('probabilities: ' + str(self.probabilities_))
 
     def predict(self, X, data):
         if not self._all_finite:
