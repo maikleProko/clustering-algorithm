@@ -1,68 +1,174 @@
-from sklearn.preprocessing import LabelEncoder
-import clustering_algo
-from clustering_algo import ClusteringAlgo
-from sklearn.datasets import make_blobs
+# main.py
 import pandas as pd
-import argparse
-import time
-import psutil
-import os
-from auto_select_metric import auto_select_metric
-
-from estimator import Estimator
+import numpy as np
+from typing import Optional, List, Dict, Tuple
+from robust_clustering import RobustHierarchicalClusteringModel
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 
 
-def convert_categorical_to_numeric(df):
-    le = LabelEncoder()
+class Estimator:
+    """Класс для оценки качества кластеризации"""
 
-    for column in df.columns:
-        if df[column].dtype == object:
-            df[column] = le.fit_transform(df[column])
-    return df
+    def __init__(self, X: np.ndarray, labels: np.ndarray):
+        self.X = X
+        self.labels = labels
+
+    def calculate_metrics(self, n_clusters) -> Dict[str, float]:
+        """Рассчёт метрик качества кластеризации"""
+        try:
+            if len(np.unique(self.labels)) < 2:
+                raise ValueError("Необходимо минимум 2 кластера")
+
+            return {
+                'silhouette_score': silhouette_score(self.X, self.labels),
+                'davies_bouldin_score': davies_bouldin_score(self.X, self.labels),
+                'calinski_harabasz_score': calinski_harabasz_score(self.X, self.labels),
+                'n_clusters': n_clusters
+            }
+        except Exception as e:
+            print(f"Ошибка при расчёте метрик: {str(e)}")
+            return {}
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run clustering on a CSV file.')
-    parser.add_argument('csv_file', type=str, help='Path to the CSV file.')
-    parser.add_argument('clustering_method', type=str, nargs='?', default='',
-                       help='Name of the clustering method to use (e.g., "AgglomerativeClustering").')
-    parser.add_argument('--mode', type=str, choices=['memory', 'time'],
-                       help='Additional information to display: memory usage or execution time')
+class DataProcessor:
+    """Класс для обработки данных"""
+
+    @staticmethod
+    def load_data(file_path: str) -> pd.DataFrame:
+        """Загрузка данных из файла"""
+        try:
+            if file_path.endswith('.csv'):
+                return pd.read_csv(file_path)
+            elif file_path.endswith('.xlsx') or file_path.endswith('.xls'):
+                return pd.read_excel(file_path)
+            elif file_path.endswith('.json'):
+                return pd.read_json(file_path)
+            raise ValueError(f"Неподдерживаемый формат файла: {file_path}")
+        except Exception as e:
+            raise ValueError(f"Ошибка при загрузке файла: {str(e)}")
+
+    @staticmethod
+    def prepare_features(df: pd.DataFrame, text_columns: Optional[List[str]] = None) -> np.ndarray:
+        """Подготовка признаков для кластеризации"""
+
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        for column in df.columns:
+            if df[column].dtype == object:
+                df[column] = le.fit_transform(df[column])
+        return df.values
+
+
+class ClusteringPipeline:
+    """Класс для управления процессом кластеризации"""
+
+    def __init__(self, text_columns: Optional[List[str]] = None):
+        self.text_columns = text_columns
+        self.model = RobustHierarchicalClusteringModel(
+            text_features=text_columns,
+            vectorizer_params={
+                'max_features': 5000,
+                'ngram_range': (1, 2)
+            }
+        )
+
+    def find_optimal_clusters(self, X: np.ndarray, min_clusters: int = 4, max_clusters: int = 100) -> Dict:
+        """Поиск оптимального количества кластеров"""
+        best_metrics = None
+
+        for n_clusters in range(min_clusters, max_clusters + 1):
+            try:
+                self.model.clusterer.n_clusters = n_clusters
+                labels = self.model.fit_predict(X)
+
+                estimator = Estimator(X, labels)
+                metrics = estimator.calculate_metrics(n_clusters)
+                print(metrics)
+
+                if self._is_satisfactory(metrics):
+                    best_metrics = {
+                        'n_clusters': n_clusters,
+                        'metrics': metrics,
+                        'status': 'optimal'
+                    }
+                    break
+
+            except Exception:
+                continue
+
+        if not best_metrics:
+            raise ValueError("Не найдено удовлетворительных параметров кластеризации")
+
+        return best_metrics
+
+    @staticmethod
+    def _is_satisfactory(metrics: Dict[str, float]) -> bool:
+        """Проверка качества метрик"""
+        silhouette_threshold = -1
+        davies_bouldin_threshold = 1.0
+        calinski_harabasz_threshold = 10
+        check = (
+                metrics['davies_bouldin_score'] <= davies_bouldin_threshold and
+                metrics['calinski_harabasz_score'] >= calinski_harabasz_threshold or
+
+                metrics['silhouette_score'] >= silhouette_threshold and
+                metrics['calinski_harabasz_score'] >= calinski_harabasz_threshold or
+
+                metrics['silhouette_score'] >= silhouette_threshold and
+                metrics['davies_bouldin_score'] <= davies_bouldin_threshold
+        )
+
+        return check
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Кластеризация данных')
+    parser.add_argument('--input_file', required=True, help='Путь к входному файлу с данными')
+    parser.add_argument('--n_clusters', type=int, default=8, help='Количество кластеров')
+    parser.add_argument('--text_columns', nargs='+', help='Имена текстовых столбцов')
+    parser.add_argument('--output_file', default='clusters.csv', help='Файл для сохранения результатов')
+
     args = parser.parse_args()
-    no_error_with_file = True
-
-    data = None
 
     try:
-        data = pd.read_csv(args.csv_file)
+        # Загрузка и подготовка данных
+        df = DataProcessor.load_data(args.input_file)
+        X = DataProcessor.prepare_features(df, args.text_columns)
 
-        print('LOADING DATA')
-        print(data)
-        converted_data = convert_categorical_to_numeric(data)
-    except:
-        no_error_with_file = False
-        print('Error with work with file: ' + str(args.csv_file))
+        # Кластеризация
+        pipeline = ClusteringPipeline(args.text_columns)
+        best_params = pipeline.find_optimal_clusters(X)
 
-    metric = args.clustering_method
-    if not metric:
-        metric = auto_select_metric(data.to_numpy())
+        # Финальная кластеризация
+        pipeline.model.clusterer.n_clusters = best_params['n_clusters']
+        labels = pipeline.model.fit_predict(X)
 
-    if no_error_with_file:
-        clusterer = None
-        cluster_labels = None
-        try:
-            clusterer = clustering_algo.ClusteringAlgo(metric=metric)
-            cluster_labels = clusterer.fit_predict(data)
-        except:
-            print('Error with work with clustering method: ' + str(args.clustering_method))
+        # Сохранение результатов
+        result_df = df.copy()
+        result_df['cluster'] = labels
+        print(result_df)
+        result_df.to_csv(args.output_file, index=False)
 
-        print('\nCLUSTERING RESULT')
-        print(cluster_labels)
+        # Вывод метрик
+        print("\nФинальные метрики качества кластеризации:")
+        for name, value in best_params['metrics'].items():
+            print(f"{name}: {value:.3f}")
 
-        # Добавлен код для отслеживания памяти и времени
-        if args.mode == 'memory':
-            process = psutil.Process(os.getpid())
-            mem_usage = process.memory_info().rss / (1024 * 1024)  # в МБ
-            print(f'\nMemory usage: {mem_usage:.2f} MB')
-        elif args.mode == 'time':
-            print(f'\nExecution time: {time.process_time():.2f} seconds')
+
+        # Подсчет элементов в кластерах
+        print("\nРаспределение элементов по кластерам:")
+        cluster_counts = result_df['cluster'].value_counts().sort_index()
+        for cluster_id, count in cluster_counts.items():
+            print(f"Кластер {cluster_id}: {count} элементов")
+
+        pipeline.model.visualize_dendrogram()
+        pipeline.model.visualize_scatter()
+
+    except Exception as e:
+        print(f"Ошибка при обработке данных: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
